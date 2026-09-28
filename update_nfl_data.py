@@ -285,6 +285,56 @@ sp_json       = json.dumps(stat_profiles)
 total_kb = (len(players_json)+len(def_json)+len(ts_json)+len(sched_json)+len(inj_json)+len(actual_json)+len(sp_json))//1024
 print(f"   Total data size: {total_kb} KB")
 
+
+# ── STEP 7: HEAD-TO-HEAD HISTORY ─────────────────────────────────────────────
+print("📥 Building head-to-head history (2021–present)...")
+ps_h2h = skill_filter(nfl.load_player_stats([2021, 2022, 2023, 2024, 2025, CURRENT_SEASON]))
+
+raw_h2h = {}
+for row in ps_h2h.select([
+    'player_display_name','position','season','week','opponent_team','fantasy_points_ppr',
+    'passing_yards','passing_tds','passing_interceptions',
+    'rushing_yards','rushing_tds','carries',
+    'receptions','receiving_yards','receiving_tds','targets'
+]).iter_rows(named=True):
+    name = row['player_display_name']
+    opp  = row['opponent_team']
+    fp   = round(row['fantasy_points_ppr'] or 0, 1)
+    if not opp or fp == 0 or name not in player_profiles:
+        continue
+    pos = player_profiles[name]['pos']
+    if name not in raw_h2h:
+        raw_h2h[name] = {}
+    if opp not in raw_h2h[name]:
+        raw_h2h[name][opp] = []
+    entry = {'s': row['season'], 'w': row['week'], 'fp': fp}
+    if pos == 'QB':
+        entry.update({'py': row['passing_yards'] or 0, 'pt': row['passing_tds'] or 0,
+                      'i': row['passing_interceptions'] or 0, 'ry': row['rushing_yards'] or 0})
+    elif pos == 'RB':
+        entry.update({'ry': row['rushing_yards'] or 0, 'rt': row['rushing_tds'] or 0,
+                      'rc': row['receptions'] or 0, 'rcy': row['receiving_yards'] or 0, 'tg': row['targets'] or 0})
+    else:
+        entry.update({'rc': row['receptions'] or 0, 'rcy': row['receiving_yards'] or 0,
+                      'rct': row['receiving_tds'] or 0, 'tg': row['targets'] or 0})
+    raw_h2h[name][opp].append(entry)
+
+# Slim to schedule opponents only, last 5 games each
+slim_h2h = {}
+for name, opp_map in raw_h2h.items():
+    team = player_profiles[name]['team']
+    season_opps = set(v[0] for v in team_schedule.get(team, {}).values())
+    player_h2h = {}
+    for opp, games in opp_map.items():
+        if opp not in season_opps:
+            continue
+        player_h2h[opp] = sorted(games, key=lambda x: (x['s'], x['w']), reverse=True)[:5]
+    if player_h2h:
+        slim_h2h[name] = player_h2h
+
+h2h_json = json.dumps(slim_h2h, separators=(',', ':'))
+print(f"   H2H entries: {len(slim_h2h)} players · {len(h2h_json)//1024}KB")
+
 # ── STEP 8: WRITE App.jsx ────────────────────────────────────────────────────
 print(f"✍️  Writing {APP_JSX_PATH}...")
 
@@ -298,6 +348,7 @@ header = (
     f'const NFL_PLAYERS = {players_json};\n'
     f'const ACTUAL_{CURRENT_SEASON} = {actual_json};\n'
     f'const STAT_PROFILES = {sp_json};\n'
+    f'const H2H = {h2h_json};\n'
     f'const CURRENT_WEEK = {CURRENT_WEEK};\n'
     f'const CURRENT_SEASON = {CURRENT_SEASON};\n'
     f'const LAST_WEEK = {LAST_WEEK};\n'
